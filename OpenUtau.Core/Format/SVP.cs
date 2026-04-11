@@ -64,12 +64,13 @@ namespace OpenUtau.Core.Format {
                     trackNo = track.TrackNo
                 };
 
-                var pitdPoints = new List<(int x, int y)>();
-                var dynPoints = new List<(int x, int y)>();
-                var tenPoints = new List<(int x, int y)>();
-                var brePoints = new List<(int x, int y)>();
-                var genPoints = new List<(int x, int y)>(); 
-                var vocalModePoints = new Dictionary<string, List<(int x, int y)>>(); 
+                var manualPitchPoints = new List<(double x, double y)>();
+                var aiPitchPoints = new List<(double x, double y)>();
+                var dynPoints = new List<(double x, double y)>();
+                var tenPoints = new List<(double x, double y)>();
+                var brePoints = new List<(double x, double y)>();
+                var genPoints = new List<(double x, double y)>(); 
+                var vocalModePoints = new Dictionary<string, List<(double x, double y)>>();
 
                 var phonemeQueue = new Queue<string>();
                 // audio track
@@ -143,8 +144,8 @@ namespace OpenUtau.Core.Format {
                     }
 
                     if (group.parameters != null) {
-                        ParseFlatCurve(group.parameters.pitchDelta?.points, pitdPoints, offsetBlicks, blicksPerTick, 1f);
-                        ParseFlatCurve(group.parameters.loudness?.points, dynPoints, offsetBlicks, blicksPerTick, 10f); 
+                        ParseFlatCurve(group.parameters.pitchDelta?.points, manualPitchPoints, offsetBlicks, blicksPerTick, 1f);
+                        ParseFlatCurve(group.parameters.loudness?.points, dynPoints, offsetBlicks, blicksPerTick, 10f);
                         ParseFlatCurve(group.parameters.tension?.points, tenPoints, offsetBlicks, blicksPerTick, 100f);
                         ParseFlatCurve(group.parameters.breathiness?.points, brePoints, offsetBlicks, blicksPerTick, 100f);
                         ParseFlatCurve(group.parameters.gender?.points, genPoints, offsetBlicks, blicksPerTick, 100f); 
@@ -153,7 +154,7 @@ namespace OpenUtau.Core.Format {
                     if (group.vocalModes != null) {
                         foreach (var kvp in group.vocalModes) {
                             if (!vocalModePoints.ContainsKey(kvp.Key)) {
-                                vocalModePoints[kvp.Key] = new List<(int x, int y)>();
+                                vocalModePoints[kvp.Key] = new List<(double x, double y)>();
                             }
                             ParseFlatCurve(kvp.Value?.points, vocalModePoints[kvp.Key], offsetBlicks, blicksPerTick, 1f);
                         }
@@ -170,7 +171,7 @@ namespace OpenUtau.Core.Format {
                             singerName = svpTrack.mainRef.database.name;
                         }
                         if (svpTrack.mainRef.systemPitchDelta != null) {
-                            ParseFlatCurve(svpTrack.mainRef.systemPitchDelta.points, pitdPoints, svpTrack.mainRef.blickOffset, blicksPerTick, 1f);
+                            ParseFlatCurve(svpTrack.mainRef.systemPitchDelta.points, aiPitchPoints, svpTrack.mainRef.blickOffset, blicksPerTick, 1f);
                         }
                         if (!string.IsNullOrEmpty(svpTrack.mainRef.groupID) && libraryGroups.TryGetValue(svpTrack.mainRef.groupID, out var libGroup)) {
                             ExtractGroup(libGroup, svpTrack.mainRef.blickOffset);
@@ -201,8 +202,9 @@ namespace OpenUtau.Core.Format {
                 if (!project.expressions.ContainsKey(Ustx.GENC)) {
                     project.RegisterExpression(new UExpressionDescriptor("gender curve", Ustx.GENC, -100, 100, 0) { type = UExpressionType.Curve });
                 }
-                pitdPoints.RemoveAll(pt => pt.y == 40 || pt.y == -40);
-                FinalizeCurve(project, part, Ustx.PITD, pitdPoints);
+
+                aiPitchPoints.RemoveAll(pt => pt.y == 40 || pt.y == -40);
+                FinalizeMergedPitch(project, part, Ustx.PITD, manualPitchPoints, aiPitchPoints);
                 FinalizeCurve(project, part, Ustx.DYN, dynPoints);
                 FinalizeCurve(project, part, Ustx.TENC, tenPoints);
                 FinalizeCurve(project, part, Ustx.BREC, brePoints);
@@ -257,60 +259,179 @@ namespace OpenUtau.Core.Format {
             return curve;
         }
 
-        private static void ParseFlatCurve(List<double> points, List<(int x, int y)> outPoints, long offsetBlicks, double blicksPerTick, float multiplier) {
+        private static void ParseFlatCurve(List<double> points, List<(double x, double y)> outPoints, long offsetBlicks, double blicksPerTick, float multiplier) {
             if (points == null || points.Count < 2) return;
 
             for (int i = 0; i < points.Count - 1; i += 2) {
-                int tick = Math.Max(0, (int)Math.Round((points[i] + offsetBlicks) / blicksPerTick));
-                int val = (int)Math.Round(points[i + 1] * multiplier);
+                double tick = (points[i] + offsetBlicks) / blicksPerTick;
+                double val = points[i + 1] * multiplier;
                 outPoints.Add((tick, val));
             }
         }
 
-        private static void FinalizeCurve(UProject project, UVoicePart part, string abbr, List<(int x, int y)> points) {
+        private static void FinalizeCurve(UProject project, UVoicePart part, string abbr, List<(double x, double y)> points) {
             if (points.Count == 0) return;
 
             var curve = GetCurve(project, part, abbr);
             if (curve == null) return; 
 
             var sortedPoints = points.OrderBy(p => p.x).ToList();
-            var smoothedPoints = SmoothCurve(sortedPoints, 15);
+            int n = sortedPoints.Count;
+            
+            if (n < 2) return;
+
+            // Non-Uniform Tangents (Slopes)
+            double[] m = new double[n];
+            for (int i = 0; i < n; i++) {
+                if (i == 0) {
+                    double dx = sortedPoints[1].x - sortedPoints[0].x;
+                    m[i] = dx > 0 ? (sortedPoints[1].y - sortedPoints[0].y) / dx : 0;
+                } else if (i == n - 1) {
+                    double dx = sortedPoints[n - 1].x - sortedPoints[n - 2].x;
+                    m[i] = dx > 0 ? (sortedPoints[n - 1].y - sortedPoints[n - 2].y) / dx : 0;
+                } else {
+                    double dx1 = sortedPoints[i].x - sortedPoints[i - 1].x;
+                    double dx2 = sortedPoints[i + 1].x - sortedPoints[i].x;
+                    double dy1 = sortedPoints[i].y - sortedPoints[i - 1].y;
+                    double dy2 = sortedPoints[i + 1].y - sortedPoints[i].y;
+                    
+                    double m1 = dx1 > 0 ? dy1 / dx1 : 0;
+                    double m2 = dx2 > 0 ? dy2 / dx2 : 0;
+                    
+                    m[i] = (dx1 + dx2 > 0) ? (m1 * dx2 + m2 * dx1) / (dx1 + dx2) : 0;
+                }
+            }
 
             int min = (int)(curve.descriptor?.min ?? -1200);
             int max = (int)(curve.descriptor?.max ?? 1200);
-            int lastTick = -999;
-            
-            foreach (var pt in smoothedPoints) {
-                if (pt.x - lastTick >= 5) {
-                    int yClamped = Math.Max(min, Math.Min(max, pt.y)); 
-                    curve.xs.Add(pt.x);
-                    curve.ys.Add(yClamped);
-                    lastTick = pt.x;
-                }
-            }
 
-            if (curve.xs.Count > 0 && curve.xs.Last() != smoothedPoints.Last().x) {
-                int finalY = Math.Max(min, Math.Min(max, smoothedPoints.Last().y));
-                curve.xs.Add(smoothedPoints.Last().x);
-                curve.ys.Add(finalY);
+            int interval = 2;
+            int startTick = Math.Max(0, (int)Math.Floor(sortedPoints[0].x));
+            int endTick = (int)Math.Ceiling(sortedPoints[n - 1].x);
+
+            int currentPt = 0;
+            for (int x = startTick; x <= endTick; x += interval) {
+                while (currentPt < n - 2 && sortedPoints[currentPt + 1].x < x) {
+                    currentPt++;
+                }
+
+                double x0 = sortedPoints[currentPt].x;
+                double y0 = sortedPoints[currentPt].y;
+                double x1 = sortedPoints[currentPt + 1].x;
+                double y1 = sortedPoints[currentPt + 1].y;
+                double dx = x1 - x0;
+
+                double y;
+                if (dx <= 0) {
+                    y = y1;
+                } else if (x <= x0) {
+                    y = y0;
+                } else if (x >= x1) {
+                    y = y1;
+                } else {
+                    // Cubic Hermite Spline Formula
+                    double t = (x - x0) / dx;
+                    double t2 = t * t;
+                    double t3 = t2 * t;
+
+                    double h00 = 2 * t3 - 3 * t2 + 1;
+                    double h10 = t3 - 2 * t2 + t;
+                    double h01 = -2 * t3 + 3 * t2;
+                    double h11 = t3 - t2;
+
+                    y = h00 * y0 + h10 * dx * m[currentPt] + h01 * y1 + h11 * dx * m[currentPt + 1];
+                }
+
+                int yClamped = Math.Max(min, Math.Min(max, (int)Math.Round(y)));
+                curve.xs.Add(x);
+                curve.ys.Add(yClamped);
             }
         }
 
-        private static List<(int x, int y)> SmoothCurve(List<(int x, int y)> points, int windowSize) {
-            if (points.Count == 0) return points;
-            var result = new List<(int x, int y)>();
-            int half = windowSize / 2;
-            
-            for (int i = 0; i < points.Count; i++) {
-                int sum = 0;
-                int count = 0;
-                for (int j = Math.Max(0, i - half); j <= Math.Min(points.Count - 1, i + half); j++) {
-                    sum += points[j].y;
-                    count++;
-                }
-                result.Add((points[i].x, (int)Math.Round((double)sum / count)));
+        private static double GetY(List<(double x, double y)> pts, double targetX) {
+            if (pts == null || pts.Count == 0) return 0;
+            if (pts.Count == 1) return pts[0].y;
+            if (targetX <= pts[0].x) return pts[0].y;
+            if (targetX >= pts.Last().x) return pts.Last().y;
+
+            int i = 0;
+            while (i < pts.Count - 2 && pts[i + 1].x <= targetX) {
+                i++;
             }
-            return result;
+
+            double x0 = pts[i].x;
+            double y0 = pts[i].y;
+            double x1 = pts[i + 1].x;
+            double y1 = pts[i + 1].y;
+            double dx = x1 - x0;
+            
+            if (dx <= 0) return y1;
+
+            // Calculate Secant Slopes
+            double secant = (y1 - y0) / dx;
+            double secantPrev = i == 0 ? secant : (y0 - pts[i - 1].y) / (x0 - pts[i - 1].x);
+            double secantNext = i + 2 >= pts.Count ? secant : (pts[i + 2].y - y1) / (pts[i + 2].x - x1);
+
+            // Monotone Tangent Calculation
+            double m0 = 0;
+            if (Math.Sign(secantPrev) == Math.Sign(secant) && secant != 0) {
+                m0 = Math.Sign(secant) * Math.Min(Math.Abs(0.5 * (secantPrev + secant)), 3.0 * Math.Min(Math.Abs(secantPrev), Math.Abs(secant)));
+            }
+
+            double m1 = 0;
+            if (Math.Sign(secant) == Math.Sign(secantNext) && secant != 0) {
+                m1 = Math.Sign(secant) * Math.Min(Math.Abs(0.5 * (secant + secantNext)), 3.0 * Math.Min(Math.Abs(secant), Math.Abs(secantNext)));
+            }
+
+            // Cubic Hermite Spline Interpolation
+            double t = (targetX - x0) / dx;
+            double t2 = t * t;
+            double t3 = t2 * t;
+
+            double h00 = 2 * t3 - 3 * t2 + 1;
+            double h10 = t3 - 2 * t2 + t;
+            double h01 = -2 * t3 + 3 * t2;
+            double h11 = t3 - t2;
+
+            return h00 * y0 + h10 * dx * m0 + h01 * y1 + h11 * dx * m1;
+        }
+
+        private static void FinalizeMergedPitch(UProject project, UVoicePart part, string abbr, List<(double x, double y)> manualPt, List<(double x, double y)> aiPt) {
+            if (manualPt.Count == 0 && aiPt.Count == 0) return;
+
+            var curve = GetCurve(project, part, abbr);
+            if (curve == null) return;
+
+            var sortedManual = manualPt.OrderBy(p => p.x).ToList();
+            var sortedAi = aiPt.OrderBy(p => p.x).ToList();
+
+            double minX = double.MaxValue;
+            double maxX = double.MinValue;
+
+            if (sortedManual.Count > 0) {
+                minX = Math.Min(minX, sortedManual.First().x);
+                maxX = Math.Max(maxX, sortedManual.Last().x);
+            }
+            if (sortedAi.Count > 0) {
+                minX = Math.Min(minX, sortedAi.First().x);
+                maxX = Math.Max(maxX, sortedAi.Last().x);
+            }
+
+            int startTick = Math.Max(0, (int)Math.Floor(minX));
+            int endTick = (int)Math.Ceiling(maxX);
+
+            int minVal = (int)(curve.descriptor?.min ?? -1200);
+            int maxVal = (int)(curve.descriptor?.max ?? 1200);
+
+            // Step through time, adding the AI tuning and Manual tuning together
+            for (int x = startTick; x <= endTick; x += 2) { 
+                double yManual = GetY(sortedManual, x);
+                double yAi = GetY(sortedAi, x);
+                
+                int finalY = Math.Max(minVal, Math.Min(maxVal, (int)Math.Round(yManual + yAi)));
+                curve.xs.Add(x);
+                curve.ys.Add(finalY);
+            }
         }
 
         private class SVPProject {

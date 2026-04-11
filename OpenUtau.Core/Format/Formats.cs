@@ -16,7 +16,8 @@ namespace OpenUtau.Core.Format {
         const string midiMatch = "MThd";
         const string ufdataMatch = "\"formatVersion\":";
         const string musicxmlMatch = "score-partwise";
-        const string svpMatch = "\"version\":";
+        const string svpVersion = "\"version\":";
+        const string svpVMs = "\"vocalModeParams\":";
 
         public static ProjectFormats DetectProjectFormat(string file) {
             var lines = new List<string>();
@@ -40,7 +41,7 @@ namespace OpenUtau.Core.Format {
                 return ProjectFormats.Ufdata;
             } else if (contents.Contains(musicxmlMatch)) {
                 return ProjectFormats.Musicxml;
-            } else if (contents.Contains(svpMatch)) {
+            } else if (contents.Contains(svpVersion) && contents.Contains(svpVMs)) {
                 return ProjectFormats.Svp;
             } else {
                 return ProjectFormats.Unknown;
