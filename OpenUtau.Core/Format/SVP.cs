@@ -66,6 +66,7 @@ namespace OpenUtau.Core.Format {
 
                 var manualPitchPoints = new List<(double x, double y)>();
                 var aiPitchPoints = new List<(double x, double y)>();
+                var manualNoteRanges = new List<(int start, int end)>();
                 var dynPoints = new List<(double x, double y)>();
                 var tenPoints = new List<(double x, double y)>();
                 var brePoints = new List<(double x, double y)>();
@@ -102,7 +103,7 @@ namespace OpenUtau.Core.Format {
 
                     if (group.notes != null) {
                         foreach (var svpNote in group.notes) {
-                            if (svpNote.musicalType != "singing") continue;
+                            if (svpNote.musicalType != "singing" && svpNote.musicalType != "rap") continue;
 
                             int tickOn = (int)Math.Round((svpNote.onset + offsetBlicks) / blicksPerTick);
                             int tickOff = (int)Math.Round((svpNote.onset + svpNote.duration + offsetBlicks) / blicksPerTick);
@@ -110,6 +111,10 @@ namespace OpenUtau.Core.Format {
 
                             var note = project.CreateNote(svpNote.pitch, tickOn, duration);
                             note.lyric = string.IsNullOrEmpty(svpNote.lyrics) ? "a" : svpNote.lyrics;
+
+                            if (svpNote.instantMode.HasValue && svpNote.instantMode.Value == false) {
+                                manualNoteRanges.Add((tickOn, tickOff));
+                            }
 
                             if (note.lyric == "-") {
                                 note.lyric = "+~";
@@ -137,6 +142,46 @@ namespace OpenUtau.Core.Format {
                                 } else {
                                     note.lyric += $" [{currentSyl}]";
                                 }
+                            }
+
+                            note.pitch.data.Clear(); 
+                            note.vibrato.length = 0;
+
+                            
+                            var activeAttrs = svpNote.attributes ?? svpNote.systemAttributes;
+
+                            if (activeAttrs != null) {
+                                // vibrato mapping from the settings
+                                double vbrDepth = activeAttrs.dF0Vbr ?? 0;
+                                if (vbrDepth > 0) {
+                                    note.vibrato.depth = (float)(vbrDepth * 100);
+                                    double vbrFreq = activeAttrs.fF0Vbr ?? 5.5; 
+                                    note.vibrato.period = (float)(1000.0 / (vbrFreq > 0 ? vbrFreq : 5.5));
+                                    double vbrStartSec = activeAttrs.tF0VbrStart ?? 0.25;
+                                    double noteDurationSec = (duration * project.resolution) / 705600000.0; // Rough Blick-to-second estimate
+                                    double activeVbrSec = Math.Max(0, noteDurationSec - vbrStartSec);
+                                    double lengthPercent = (activeVbrSec / noteDurationSec) * 100.0;
+                                    note.vibrato.length = (float)Math.Max(0, Math.Min(100, lengthPercent));
+                                }
+
+                                // portamento mapping
+                                double portamentoLeft = activeAttrs.tF0Left ?? 0.04;
+                                double portamentoRight = activeAttrs.tF0Right ?? 0.04;
+                                double portamentoOffset = activeAttrs.tF0Offset ?? 0.0;
+
+                                float msOffset = (float)(portamentoOffset * 1000.0);
+                                float msLeft = (float)(portamentoLeft * 1000.0);
+                                float msRight = (float)(portamentoRight * 1000.0);
+
+                                float yLeft = (float)((activeAttrs.dF0Left ?? 0.0) * 10.0);
+                                float yRight = (float)((activeAttrs.dF0Right ?? 0.0) * 10.0);
+
+                                float xStart = -msLeft + msOffset;
+                                float xEnd = msRight + msOffset;
+
+                                note.pitch.AddPoint(new PitchPoint(xStart, yLeft)); 
+                                note.pitch.AddPoint(new PitchPoint(xEnd, yRight));
+                                
                             }
 
                             part.notes.Add(note);
@@ -204,7 +249,8 @@ namespace OpenUtau.Core.Format {
                 }
 
                 aiPitchPoints.RemoveAll(pt => pt.y == 40 || pt.y == -40);
-                FinalizeMergedPitch(project, part, Ustx.PITD, manualPitchPoints, aiPitchPoints);
+                manualPitchPoints.RemoveAll(pt => pt.y == 40 || pt.y == -40);
+                FinalizeMergedPitch(project, part, Ustx.PITD, manualPitchPoints, aiPitchPoints, manualNoteRanges);
                 FinalizeCurve(project, part, Ustx.DYN, dynPoints);
                 FinalizeCurve(project, part, Ustx.TENC, tenPoints);
                 FinalizeCurve(project, part, Ustx.BREC, brePoints);
@@ -365,25 +411,36 @@ namespace OpenUtau.Core.Format {
             double y1 = pts[i + 1].y;
             double dx = x1 - x0;
             
-            if (dx <= 0) return y1;
+            if (dx <= 0) return y1; 
 
-            // Calculate Secant Slopes
             double secant = (y1 - y0) / dx;
-            double secantPrev = i == 0 ? secant : (y0 - pts[i - 1].y) / (x0 - pts[i - 1].x);
-            double secantNext = i + 2 >= pts.Count ? secant : (pts[i + 2].y - y1) / (pts[i + 2].x - x1);
-
-            // Monotone Tangent Calculation
             double m0 = 0;
-            if (Math.Sign(secantPrev) == Math.Sign(secant) && secant != 0) {
-                m0 = Math.Sign(secant) * Math.Min(Math.Abs(0.5 * (secantPrev + secant)), 3.0 * Math.Min(Math.Abs(secantPrev), Math.Abs(secant)));
+
+            if (i == 0) {
+                m0 = secant;
+            } else {
+                double dxPrev = x0 - pts[i - 1].x;
+                double secantPrev = dxPrev > 0 ? (y0 - pts[i - 1].y) / dxPrev : 0;
+                if (secantPrev * secant > 0) {
+                    m0 = (secantPrev + secant) * 0.5;
+                    m0 = Math.Sign(m0) * Math.Min(Math.Abs(m0), Math.Min(3.0 * Math.Abs(secantPrev), 3.0 * Math.Abs(secant)));
+                }
             }
 
+            // Clamped Tangent M1
             double m1 = 0;
-            if (Math.Sign(secant) == Math.Sign(secantNext) && secant != 0) {
-                m1 = Math.Sign(secant) * Math.Min(Math.Abs(0.5 * (secant + secantNext)), 3.0 * Math.Min(Math.Abs(secant), Math.Abs(secantNext)));
+            if (i + 2 >= pts.Count) {
+                m1 = secant;
+            } else {
+                double dxNext = pts[i + 2].x - x1;
+                double secantNext = dxNext > 0 ? (pts[i + 2].y - y1) / dxNext : 0;
+                if (secant * secantNext > 0) {
+                    m1 = (secant + secantNext) * 0.5;
+                    m1 = Math.Sign(m1) * Math.Min(Math.Abs(m1), Math.Min(3.0 * Math.Abs(secant), 3.0 * Math.Abs(secantNext)));
+                }
             }
 
-            // Cubic Hermite Spline Interpolation
+            // Standard Cubic Hermite Formula
             double t = (targetX - x0) / dx;
             double t2 = t * t;
             double t3 = t2 * t;
@@ -396,7 +453,7 @@ namespace OpenUtau.Core.Format {
             return h00 * y0 + h10 * dx * m0 + h01 * y1 + h11 * dx * m1;
         }
 
-        private static void FinalizeMergedPitch(UProject project, UVoicePart part, string abbr, List<(double x, double y)> manualPt, List<(double x, double y)> aiPt) {
+        private static void FinalizeMergedPitch(UProject project, UVoicePart part, string abbr, List<(double x, double y)> manualPt, List<(double x, double y)> aiPt, List<(int start, int end)> manualNoteRanges) {
             if (manualPt.Count == 0 && aiPt.Count == 0) return;
 
             var curve = GetCurve(project, part, abbr);
@@ -423,14 +480,26 @@ namespace OpenUtau.Core.Format {
             int minVal = (int)(curve.descriptor?.min ?? -1200);
             int maxVal = (int)(curve.descriptor?.max ?? 1200);
 
-            // Step through time, adding the AI tuning and Manual tuning together
-            for (int x = startTick; x <= endTick; x += 2) { 
-                double yManual = GetY(sortedManual, x);
-                double yAi = GetY(sortedAi, x);
+            for (int x = startTick; x <= endTick; x += 5) { 
+                bool inManual = sortedManual.Count > 0 && x >= sortedManual.First().x && x <= sortedManual.Last().x;
+                bool inAi = sortedAi.Count > 0 && x >= sortedAi.First().x && x <= sortedAi.Last().x;
+
+                if (!inManual && !inAi) continue;
+
+                double yManual = inManual ? GetY(sortedManual, x) : 0;
+                double yAi = inAi ? GetY(sortedAi, x) : 0;
+
+                bool isBlueNote = manualNoteRanges.Any(r => x >= r.start && x <= r.end);
+                if (isBlueNote) {
+                    yAi = 0; 
+                }
                 
                 int finalY = Math.Max(minVal, Math.Min(maxVal, (int)Math.Round(yManual + yAi)));
-                curve.xs.Add(x);
-                curve.ys.Add(finalY);
+                
+                if (curve.xs.Count == 0 || x > curve.xs.Last()) {
+                    curve.xs.Add(x);
+                    curve.ys.Add(finalY);
+                }
             }
         }
 
@@ -508,6 +577,20 @@ namespace OpenUtau.Core.Format {
             public string lyrics { get; set; }
             public string phonemes { get; set; }
             public int pitch { get; set; }
+            public bool? instantMode { get; set; }
+            public SVPAttributes attributes { get; set; }
+            public SVPAttributes systemAttributes { get; set; }
+        }
+
+        private class SVPAttributes {
+            public double? tF0Offset { get; set; }
+            public double? tF0Left { get; set; }
+            public double? tF0Right { get; set; }
+            public double? dF0Left { get; set; }
+            public double? dF0Right { get; set; }
+            public double? dF0Vbr { get; set; }
+            public double? fF0Vbr { get; set; }
+            public double? tF0VbrStart { get; set; }
         }
     }
 }
