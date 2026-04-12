@@ -70,10 +70,12 @@ namespace OpenUtau.Core.Format {
                 var dynPoints = new List<(double x, double y)>();
                 var tenPoints = new List<(double x, double y)>();
                 var brePoints = new List<(double x, double y)>();
-                var genPoints = new List<(double x, double y)>(); 
+                var genPoints = new List<(double x, double y)>();
+                var voicingPoints = new List<(double x, double y)>();
+                var toneShiftPoints = new List<(double x, double y)>();
                 var vocalModePoints = new Dictionary<string, List<(double x, double y)>>();
-
                 var phonemeQueue = new Queue<string>();
+                
                 // audio track
                 void TryParseAudio(SVPMRef mRef) {
                     if (mRef == null || !mRef.isInstrumental || mRef.audio == null || string.IsNullOrWhiteSpace(mRef.audio.filename)) return;
@@ -193,7 +195,9 @@ namespace OpenUtau.Core.Format {
                         ParseFlatCurve(group.parameters.loudness?.points, dynPoints, offsetBlicks, blicksPerTick, 10f);
                         ParseFlatCurve(group.parameters.tension?.points, tenPoints, offsetBlicks, blicksPerTick, 100f);
                         ParseFlatCurve(group.parameters.breathiness?.points, brePoints, offsetBlicks, blicksPerTick, 100f);
-                        ParseFlatCurve(group.parameters.gender?.points, genPoints, offsetBlicks, blicksPerTick, 100f); 
+                        ParseFlatCurve(group.parameters.gender?.points, genPoints, offsetBlicks, blicksPerTick, 100f);
+                        ParseFlatCurve(group.parameters.voicing?.points, voicingPoints, offsetBlicks, blicksPerTick, 100f);
+                        ParseFlatCurve(group.parameters.toneShift?.points, toneShiftPoints, offsetBlicks, blicksPerTick, 100f);
                     }
                     // vocal mode curves
                     if (group.vocalModes != null) {
@@ -247,6 +251,12 @@ namespace OpenUtau.Core.Format {
                 if (!project.expressions.ContainsKey(Ustx.GENC)) {
                     project.RegisterExpression(new UExpressionDescriptor("gender curve", Ustx.GENC, -100, 100, 0) { type = UExpressionType.Curve });
                 }
+                if (!project.expressions.ContainsKey(Ustx.VOIC)) {
+                    project.RegisterExpression(new UExpressionDescriptor("voicing curve", Ustx.VOIC, -100, 100, 0) { type = UExpressionType.Curve });
+                }
+                if (!project.expressions.ContainsKey(Ustx.SHFC)) {
+                    project.RegisterExpression(new UExpressionDescriptor("tone shift curve", Ustx.SHFC, -100, 100, 0) { type = UExpressionType.Curve });
+                }
 
                 aiPitchPoints.RemoveAll(pt => pt.y == 40 || pt.y == -40);
                 manualPitchPoints.RemoveAll(pt => pt.y == 40 || pt.y == -40);
@@ -255,6 +265,8 @@ namespace OpenUtau.Core.Format {
                 FinalizeCurve(project, part, Ustx.TENC, tenPoints);
                 FinalizeCurve(project, part, Ustx.BREC, brePoints);
                 FinalizeCurve(project, part, Ustx.GENC, genPoints);
+                FinalizeCurve(project, part, Ustx.VOIC, voicingPoints);
+                FinalizeCurve(project, part, Ustx.SHFC, toneShiftPoints);
 
                 foreach (var kvp in vocalModePoints) {
                     string modeName = kvp.Key;
@@ -507,6 +519,7 @@ namespace OpenUtau.Core.Format {
             public int version { get; set; }
             public SVPTime time { get; set; }
             public List<SVPGroup> library { get; set; }
+            public List<SVPGroup> groups { get; set; }
             public List<SVPTrack> tracks { get; set; }
         }
 
@@ -528,6 +541,7 @@ namespace OpenUtau.Core.Format {
 
         private class SVPGroup {
             public string uuid { get; set; }
+            public string name { get; set; }
             public List<SVPNote> notes { get; set; }
             public SVPParameters parameters { get; set; }
             public Dictionary<string, SVPCurve> vocalModes { get; set; } 
@@ -542,7 +556,10 @@ namespace OpenUtau.Core.Format {
             public SVPCurve loudness { get; set; }
             public SVPCurve tension { get; set; }
             public SVPCurve breathiness { get; set; }
-            public SVPCurve gender { get; set; } 
+            public SVPCurve gender { get; set; }
+            public SVPCurve voicing { get; set; }
+            public SVPCurve toneShift { get; set; } 
+
         }
 
         private class SVPCurve {
@@ -555,6 +572,7 @@ namespace OpenUtau.Core.Format {
             public SVPGroup mainGroup { get; set; }
             public SVPMRef mainRef { get; set; }
             public List<SVPMRef> groups { get; set; }
+            public SVPMRef mainGroupSV2 { get; set; }
         }
 
         private class SVPMRef {
@@ -593,4 +611,7 @@ namespace OpenUtau.Core.Format {
             public double? tF0VbrStart { get; set; }
         }
     }
+
+
+
 }
