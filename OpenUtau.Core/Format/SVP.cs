@@ -106,7 +106,7 @@ namespace OpenUtau.Core.Format {
 
                     if (group.notes != null) {
                         foreach (var svpNote in group.notes) {
-                            if (svpNote.musicalType != "singing" && svpNote.musicalType != "rap") continue;
+                            if (!string.IsNullOrEmpty(svpNote.musicalType) && svpNote.musicalType != "singing" && svpNote.musicalType != "rap") continue;
 
                             int tickOn = (int)Math.Round((svpNote.onset + offsetBlicks) / blicksPerTick);
                             int tickOff = (int)Math.Round((svpNote.onset + svpNote.duration + offsetBlicks) / blicksPerTick);
