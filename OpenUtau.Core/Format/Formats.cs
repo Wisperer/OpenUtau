@@ -18,6 +18,7 @@ namespace OpenUtau.Core.Format {
         const string musicxmlMatch = "score-partwise";
         const string svpVersion = "\"version\":";
         const string svpVMs = "\"vocalModeParams\":";
+        const string svp2 = "\"mouthOpening\":";
 
         public static ProjectFormats DetectProjectFormat(string file) {
             var lines = new List<string>();
@@ -41,6 +42,8 @@ namespace OpenUtau.Core.Format {
                 return ProjectFormats.Ufdata;
             } else if (contents.Contains(musicxmlMatch)) {
                 return ProjectFormats.Musicxml;
+            } else if (contents.Contains(svp2)) {
+                return ProjectFormats.Svp;
             } else if (contents.Contains(svpVersion) && contents.Contains(svpVMs)) {
                 return ProjectFormats.Svp;
             } else {
@@ -58,6 +61,13 @@ namespace OpenUtau.Core.Format {
             }
             ProjectFormats format = DetectProjectFormat(files[0]);
             UProject? project = null;
+            var lines = new List<string>();
+            using (var reader = new StreamReader(files[0])) {
+                for (int i = 0; i < 10 && !reader.EndOfStream; ++i) {
+                    lines.Add(reader.ReadLine());
+                }
+            }
+            string contents = string.Join("\n", lines);
             switch (format) {
                 case ProjectFormats.Ustx:
                     project = Ustx.Load(files[0]);
@@ -79,7 +89,11 @@ namespace OpenUtau.Core.Format {
                     project = MusicXML.LoadProject(files[0]);
                     break;
                 case ProjectFormats.Svp:
-                    project = SVP.Load(files[0]);
+                    if (contents.Contains(svp2)) {
+                        project = SVP2.Load(files[0]);
+                    } else {
+                        project = SVP.Load(files[0]);
+                    }
                     break;
                 default:
                     throw new FileFormatException("Unknown file format");
