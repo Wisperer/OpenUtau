@@ -17,7 +17,7 @@ namespace OpenUtau.Core.Format {
         const string ufdataMatch = "\"formatVersion\":";
         const string musicxmlMatch = "score-partwise";
         const string svpVersion = "\"version\":";
-        const string svpVMs = "\"vocalModeParams\":";
+        const string svpdata = "\"database\":";
         const string svp2 = "\"mouthOpening\":";
 
         public static ProjectFormats DetectProjectFormat(string file) {
@@ -44,7 +44,7 @@ namespace OpenUtau.Core.Format {
                 return ProjectFormats.Musicxml;
             } else if (contents.Contains(svp2)) {
                 return ProjectFormats.Svp;
-            } else if (contents.Contains(svpVersion) && contents.Contains(svpVMs)) {
+            } else if (contents.Contains(svpVersion) || contents.Contains(svpdata)) {
                 return ProjectFormats.Svp;
             } else {
                 return ProjectFormats.Unknown;
