@@ -14,7 +14,7 @@ namespace OpenUtau.Core.Format {
             try {
                 var json = File.ReadAllText(svpFilePath);
                 var svpProject = JsonConvert.DeserializeObject<SVPProject>(json);
-                
+
                 if (svpProject == null) {
                     throw new FileFormatException("Failed to parse SVP file");
                 }
@@ -26,11 +26,11 @@ namespace OpenUtau.Core.Format {
         }
 
         private static UProject ConvertToUstx(SVPProject svpProject, string svpFilePath) {
-            var project = new UProject {};
-            Ustx.AddDefaultExpressions(project); 
+            var project = new UProject { };
+            Ustx.AddDefaultExpressions(project);
 
             double blicksPerTick = 705600000.0 / project.resolution;
-            
+
             project.timeSignatures = svpProject.time?.meter?.Select(m =>
                 new UTimeSignature(m.index, m.numerator, m.denominator))
                 .ToList() ?? new List<UTimeSignature> { new UTimeSignature(0, 4, 4) };
@@ -50,16 +50,16 @@ namespace OpenUtau.Core.Format {
                     }
                 }
             }
-            
+
             foreach (var svpTrack in svpProject.tracks ?? new List<SVPTrack>()) {
                 string singerName = "";
                 bool trackHasContent = false;
 
-                var track = new UTrack(project) { 
+                var track = new UTrack(project) {
                     TrackNo = project.tracks.Count,
-                    TrackName = svpTrack.name ?? "Unnamed Track" 
+                    TrackName = svpTrack.name ?? "Unnamed Track"
                 };
-                
+
                 var part = new UVoicePart {
                     name = svpTrack.name ?? "Part",
                     position = 0,
@@ -77,23 +77,28 @@ namespace OpenUtau.Core.Format {
                 var toneShiftPoints = new List<(double x, double y)>();
                 var vocalModePoints = new Dictionary<string, List<(double x, double y)>>();
                 var phonemeQueue = new Queue<string>();
-                
+
                 void TryParseAudio(SVPMRef mRef) {
                     if (mRef == null || !mRef.isInstrumental || mRef.audio == null || string.IsNullOrWhiteSpace(mRef.audio.filename)) return;
 
                     string audioFile = mRef.audio.filename;
                     if (!Path.IsPathRooted(audioFile)) {
-                        audioFile = Path.GetFullPath(Path.Combine(Path.GetDirectoryName(svpFilePath), audioFile));
+                        string dir = Path.GetDirectoryName(svpFilePath);
+                        audioFile = string.IsNullOrEmpty(dir) ? Path.GetFullPath(audioFile) : Path.GetFullPath(Path.Combine(dir, audioFile));
                     }
 
-                    if (!File.Exists(audioFile)) {
-                        return; 
-                    }
+                    if (!File.Exists(audioFile)) return; 
 
+                    long startBlick = mRef.blickOffset;
+                    double audioDurationMs = mRef.audio.duration * 1000.0;
+                    int durTick = timeAxis.MsPosToTickPos(audioDurationMs);
+                    if (durTick <= 0) durTick = project.resolution * 4; 
+                    
                     var wavePart = new UWavePart {
                         name = Path.GetFileName(audioFile),
                         FilePath = audioFile,
-                        position = Math.Max(0, (int)Math.Round(mRef.blickOffset / blicksPerTick)),
+                        position = Math.Max(0, (int)Math.Round(startBlick / blicksPerTick)),
+                        Duration = durTick, 
                         trackNo = track.TrackNo
                     };
                     
@@ -124,7 +129,7 @@ namespace OpenUtau.Core.Format {
                             } else if (note.lyric.StartsWith(".")) {
                                 note.lyric = $"[{note.lyric.Substring(1)}]";
                             }
-                            
+
                             if (!string.IsNullOrWhiteSpace(svpNote.phonemes)) {
                                 phonemeQueue.Clear();
                                 var syllables = svpNote.phonemes.Split('+').Select(s => s.Trim()).ToArray();
@@ -146,9 +151,9 @@ namespace OpenUtau.Core.Format {
                                 }
                             }
 
-                            note.pitch.data.Clear(); 
+                            note.pitch.data.Clear();
                             note.vibrato.length = 0;
-                            
+
                             var activeAttrs = svpNote.attributes ?? svpNote.systemAttributes;
 
                             double? dF0Vbr = activeAttrs?.dF0Vbr ?? voice?.dF0Vbr;
@@ -158,10 +163,10 @@ namespace OpenUtau.Core.Format {
                             double vbrDepth = dF0Vbr ?? 0;
                             if (vbrDepth > 0) {
                                 note.vibrato.depth = (float)(vbrDepth * 100);
-                                double vbrFreq = fF0Vbr ?? 5.5; 
+                                double vbrFreq = fF0Vbr ?? 5.5;
                                 note.vibrato.period = (float)(1000.0 / (vbrFreq > 0 ? vbrFreq : 5.5));
                                 double vbrStartSec = tF0VbrStart ?? 0.25;
-                                double noteDurationSec = (duration * project.resolution) / 705600000.0; 
+                                double noteDurationSec = (duration * project.resolution) / 705600000.0;
                                 double activeVbrSec = Math.Max(0, noteDurationSec - vbrStartSec);
                                 double lengthPercent = (activeVbrSec / noteDurationSec) * 100.0;
                                 note.vibrato.length = (float)Math.Max(0, Math.Min(100, lengthPercent));
@@ -187,7 +192,7 @@ namespace OpenUtau.Core.Format {
                             float xStart = -msLeft + msOffset;
                             float xEnd = msRight + msOffset;
 
-                            note.pitch.AddPoint(new PitchPoint(xStart, yLeft)); 
+                            note.pitch.AddPoint(new PitchPoint(xStart, yLeft));
                             note.pitch.AddPoint(new PitchPoint(xEnd, yRight));
 
                             // Per-Note Vocal Mode Overrides
@@ -215,7 +220,7 @@ namespace OpenUtau.Core.Format {
                         ParseFlatCurve(group.parameters.voicing?.points, voicingPoints, offsetBlicks, blicksPerTick, 100f);
                         ParseFlatCurve(group.parameters.toneShift?.points, toneShiftPoints, offsetBlicks, blicksPerTick, 100f);
                     }
-                    
+
                     // Track-level default vocal modes
                     if (voice?.vocalModeParams != null) {
                         foreach (var kvp in voice.vocalModeParams) {
@@ -231,14 +236,14 @@ namespace OpenUtau.Core.Format {
                         }
                     }
 
-                    // Bulletproof JToken parsing: handles both Curves and static Sliders
+                    // JToken parsing: handles both Curves and static Sliders
                     if (group.vocalModes != null) {
                         foreach (var kvp in group.vocalModes) {
                             string modeName = kvp.Key;
                             if (!vocalModePoints.ContainsKey(modeName)) {
                                 vocalModePoints[modeName] = new List<(double x, double y)>();
                             }
-                            
+
                             if (kvp.Value.Type == JTokenType.Object) {
                                 var curve = kvp.Value.ToObject<SVPCurve>();
                                 ParseFlatCurve(curve?.points, vocalModePoints[modeName], offsetBlicks, blicksPerTick, 1f);
@@ -284,7 +289,7 @@ namespace OpenUtau.Core.Format {
                         }
                     }
                 }
-                
+
                 if (!project.expressions.ContainsKey(Ustx.TENC)) project.RegisterExpression(new UExpressionDescriptor("tension (curve)", Ustx.TENC, -100, 100, 0) { type = UExpressionType.Curve });
                 if (!project.expressions.ContainsKey(Ustx.BREC)) project.RegisterExpression(new UExpressionDescriptor("breathiness (curve)", Ustx.BREC, -100, 100, 0) { type = UExpressionType.Curve });
                 if (!project.expressions.ContainsKey(Ustx.GENC)) project.RegisterExpression(new UExpressionDescriptor("gender (curve)", Ustx.GENC, -100, 100, 0) { type = UExpressionType.Curve });
@@ -293,7 +298,7 @@ namespace OpenUtau.Core.Format {
 
                 aiPitchPoints.RemoveAll(pt => pt.y == 40 || pt.y == -40);
                 manualPitchPoints.RemoveAll(pt => pt.y == 40 || pt.y == -40);
-                
+
                 FinalizeMergedPitch(project, part, Ustx.PITD, manualPitchPoints, aiPitchPoints, manualNoteRanges);
                 FinalizeCurve(project, part, Ustx.DYN, dynPoints);
                 FinalizeCurve(project, part, Ustx.TENC, tenPoints);
@@ -311,17 +316,26 @@ namespace OpenUtau.Core.Format {
                     FinalizeCurve(project, part, abbr, kvp.Value);
                 }
 
-                if (part.notes.Count > 0 || part.curves.Count > 0) {
-                    int finalDuration = 0;
-                    if (part.notes.Count > 0) finalDuration = Math.Max(finalDuration, part.notes.Max(n => n.End));
-                    foreach (var c in part.curves) if (c.xs.Count > 0) finalDuration = Math.Max(finalDuration, c.xs.Last());
+                if (part.notes.Count > 0) {
+                    int finalDuration = part.notes.Max(n => n.End);
+                    foreach (var c in part.curves) {
+                        if (c.xs.Count > 0) finalDuration = Math.Max(finalDuration, c.xs.Last());
+                    }
                     
-                    track.Singer = USinger.CreateMissing(string.IsNullOrWhiteSpace(singerName) ? "" : singerName);
+                    track.Singer = USinger.CreateMissing(string.IsNullOrWhiteSpace(singerName) ? "Unknown" : singerName);
                     part.Duration = finalDuration;
                     project.parts.Add(part);
                     trackHasContent = true;
                 }
-                if (trackHasContent) project.tracks.Add(track);
+
+                if (trackHasContent) {
+                    track.Singer = USinger.CreateMissing(string.IsNullOrWhiteSpace(singerName) ? "Instrumental" : singerName);
+                    project.tracks.Add(track);
+                }
+            }
+
+            if (project.tracks.Count == 0) {
+                project.tracks.Add(new UTrack(project) { TrackNo = 0 });
             }
 
             project.ValidateFull();
@@ -351,7 +365,7 @@ namespace OpenUtau.Core.Format {
         private static void FinalizeCurve(UProject project, UVoicePart part, string abbr, List<(double x, double y)> points) {
             if (points.Count == 0) return;
             var curve = GetCurve(project, part, abbr);
-            if (curve == null) return; 
+            if (curve == null) return;
 
             var sortedPoints = points.OrderBy(p => p.x).ToList();
             int n = sortedPoints.Count;
@@ -413,7 +427,7 @@ namespace OpenUtau.Core.Format {
             int i = 0;
             while (i < pts.Count - 2 && pts[i + 1].x <= targetX) i++;
             double x0 = pts[i].x, y0 = pts[i].y, x1 = pts[i + 1].x, y1 = pts[i + 1].y, dx = x1 - x0;
-            if (dx <= 0) return y1; 
+            if (dx <= 0) return y1;
 
             double secant = (y1 - y0) / dx;
             double m0 = 0;
@@ -456,7 +470,7 @@ namespace OpenUtau.Core.Format {
             int minVal = (int)(curve.descriptor?.min ?? -1200);
             int maxVal = (int)(curve.descriptor?.max ?? 1200);
 
-            for (int x = startTick; x <= endTick; x += 5) { 
+            for (int x = startTick; x <= endTick; x += 5) {
                 bool inManual = sortedManual.Count > 0 && x >= sortedManual.First().x && x <= sortedManual.Last().x;
                 bool inAi = sortedAi.Count > 0 && x >= sortedAi.First().x && x <= sortedAi.Last().x;
 
@@ -466,10 +480,10 @@ namespace OpenUtau.Core.Format {
                 double yAi = inAi ? GetY(sortedAi, x) : 0;
 
                 bool isBlueNote = manualNoteRanges.Any(r => x >= r.start && x <= r.end);
-                if (isBlueNote) yAi = 0; 
-                
+                if (isBlueNote) yAi = 0;
+
                 int finalY = Math.Max(minVal, Math.Min(maxVal, (int)Math.Round(yManual + yAi)));
-                
+
                 if (curve.xs.Count == 0 || x > curve.xs.Last()) {
                     curve.xs.Add(x);
                     curve.ys.Add(finalY);
@@ -485,19 +499,37 @@ namespace OpenUtau.Core.Format {
             public List<SVPTrack> tracks { get; set; }
         }
 
-        private class SVPTime { public List<SVPMeter> meter { get; set; } public List<SVPTempo> tempo { get; set; } }
-        private class SVPMeter { public int index { get; set; } public int numerator { get; set; } public int denominator { get; set; } }
-        private class SVPTempo { public long position { get; set; } public double bpm { get; set; } }
-        private class SVPDatabase { public string name { get; set; } }
-        private class SVPCurve { public string mode { get; set; } public List<double> points { get; set; } }
-        private class SVPAudio { public string filename { get; set; } }
+        private class SVPTime { 
+            public List<SVPMeter> meter { get; set; } 
+            public List<SVPTempo> tempo { get; set; }
+        }
+        private class SVPMeter { 
+            public int index { get; set; } 
+            public int numerator { get; set; } 
+            public int denominator { get; set; }
+        }
+        private class SVPTempo { 
+            public long position { get; set; } 
+            public double bpm { get; set; }
+        }
+        private class SVPDatabase { 
+            public string name { get; set; }
+        }
+        private class SVPCurve { 
+            public string mode { get; set; } 
+            public List<double> points { get; set; }
+        }
+        private class SVPAudio { 
+            public string filename { get; set; } 
+            public double duration { get; set; }
+        }
 
         private class SVPGroup {
             public string uuid { get; set; }
             public string name { get; set; }
             public List<SVPNote> notes { get; set; }
             public SVPParameters parameters { get; set; }
-            public Dictionary<string, JToken> vocalModes { get; set; } 
+            public Dictionary<string, JToken> vocalModes { get; set; }
         }
 
         private class SVPParameters {
@@ -507,7 +539,7 @@ namespace OpenUtau.Core.Format {
             public SVPCurve breathiness { get; set; }
             public SVPCurve gender { get; set; }
             public SVPCurve voicing { get; set; }
-            public SVPCurve toneShift { get; set; } 
+            public SVPCurve toneShift { get; set; }
         }
 
         private class SVPTrack {
@@ -583,11 +615,11 @@ namespace OpenUtau.Core.Format {
         }
 
         private static UProject ConvertToUstx(SVPProject svpProject, string svpFilePath) {
-            var project = new UProject {};
-            Ustx.AddDefaultExpressions(project); 
+            var project = new UProject { };
+            Ustx.AddDefaultExpressions(project);
 
             double blicksPerTick = 705600000.0 / project.resolution;
-            
+
             project.timeSignatures = svpProject.time?.meter?.Select(m => new UTimeSignature(Math.Max(0, m.index), m.numerator, m.denominator)).ToList();
             project.timeSignatures = (project.timeSignatures == null || project.timeSignatures.Count == 0) ? new List<UTimeSignature> { new UTimeSignature(0, 4, 4) } : project.timeSignatures;
 
@@ -603,26 +635,33 @@ namespace OpenUtau.Core.Format {
                     if (!string.IsNullOrEmpty(group.uuid)) libraryGroups[group.uuid] = group;
                 }
             }
-            
+
             foreach (var svpTrack in svpProject.tracks ?? new List<SVPTrack>()) {
                 string singerName = "";
                 bool trackHasContent = false;
 
-                var track = new UTrack(project) { TrackNo = project.tracks.Count, TrackName = svpTrack.name ?? "Unnamed Track" };
-                var part = new UVoicePart { name = svpTrack.name ?? "Part", position = 0, trackNo = track.TrackNo };
+                var track = new UTrack(project) {
+                    TrackNo = project.tracks.Count,
+                    TrackName = svpTrack.name ?? "Unnamed Track",
+                    Singer = USinger.CreateMissing("")
+                };
+                var part = new UVoicePart {
+                    name = svpTrack.name ?? "Part",
+                    position = 0, trackNo = track.TrackNo
+                };
 
                 var manualPitchPoints = new List<(double x, double y)>();
-                var aiPitchPoints = new List<(double x, double y)>(); 
-                var aiAbsolutePitchPoints = new List<(double x, double y)>(); 
-                var ouEffectivePitchPoints = new List<(double x, double y)>(); 
-                
+                var aiPitchPoints = new List<(double x, double y)>();
+                var aiAbsolutePitchPoints = new List<(double x, double y)>();
+                var ouEffectivePitchPoints = new List<(double x, double y)>();
+
                 var dynPoints = new List<(double x, double y)>();
                 var tenPoints = new List<(double x, double y)>();
                 var brePoints = new List<(double x, double y)>();
                 var genPoints = new List<(double x, double y)>();
                 var voicingPoints = new List<(double x, double y)>();
                 var toneShiftPoints = new List<(double x, double y)>();
-                var opePoints = new List<(double x, double y)>(); 
+                var opePoints = new List<(double x, double y)>();
                 var vocalModePoints = new Dictionary<string, List<(double x, double y)>>();
                 var phonemeQueue = new Queue<string>();
 
@@ -634,15 +673,32 @@ namespace OpenUtau.Core.Format {
                     ParseFlatCurve(svpTrack.parameters.gender?.points, genPoints, 0, blicksPerTick, 100f);
                     ParseFlatCurve(svpTrack.parameters.voicing?.points, voicingPoints, 0, blicksPerTick, 100f);
                     ParseFlatCurve(svpTrack.parameters.toneShift?.points, toneShiftPoints, 0, blicksPerTick, 100f);
-                    ParseFlatCurve(svpTrack.parameters.mouthOpening?.points, opePoints, 0, blicksPerTick, 100f); 
+                    ParseFlatCurve(svpTrack.parameters.mouthOpening?.points, opePoints, 0, blicksPerTick, 100f);
                 }
-                
+
                 void TryParseAudio(SVPMRef mRef) {
                     if (mRef == null || !mRef.isInstrumental || mRef.audio == null || string.IsNullOrWhiteSpace(mRef.audio.filename)) return;
+
                     string audioFile = mRef.audio.filename;
-                    if (!Path.IsPathRooted(audioFile)) audioFile = Path.GetFullPath(Path.Combine(Path.GetDirectoryName(svpFilePath), audioFile));
-                    if (!File.Exists(audioFile)) return; 
-                    var wavePart = new UWavePart { name = Path.GetFileName(audioFile), FilePath = audioFile, position = Math.Max(0, (int)Math.Round(mRef.blickAbsoluteBegin / blicksPerTick)), trackNo = track.TrackNo };
+                    if (!Path.IsPathRooted(audioFile)) {
+                        string dir = Path.GetDirectoryName(svpFilePath);
+                        audioFile = string.IsNullOrEmpty(dir) ? Path.GetFullPath(audioFile) : Path.GetFullPath(Path.Combine(dir, audioFile));
+                    }
+
+                    if (!File.Exists(audioFile)) return;
+                    double audioDurationMs = mRef.audio.duration * 1000.0;
+                    int durTick = timeAxis.MsPosToTickPos(audioDurationMs);
+                    if (durTick <= 0) durTick = project.resolution * 4;
+
+                    long startBlick = mRef.blickAbsoluteBegin > 0 ? mRef.blickAbsoluteBegin : mRef.blickOffset;
+                    var wavePart = new UWavePart {
+                        name = Path.GetFileName(audioFile),
+                        FilePath = audioFile,
+                        position = Math.Max(0, (int)Math.Round(startBlick / blicksPerTick)),
+                        Duration = durTick,
+                        trackNo = track.TrackNo
+                    };
+
                     project.parts.Add(wavePart);
                     trackHasContent = true;
                 }
@@ -656,18 +712,18 @@ namespace OpenUtau.Core.Format {
 
                             int tickOn = Math.Max(0, (int)Math.Round((svpNote.onset + absoluteOffsetBlicks) / blicksPerTick));
                             int tickOff = (int)Math.Round((svpNote.onset + svpNote.duration + absoluteOffsetBlicks) / blicksPerTick);
-                            if (tickOff <= 0) continue; 
+                            if (tickOff <= 0) continue;
                             int duration = Math.Max(tickOff - tickOn, 1);
 
                             var note = project.CreateNote(svpNote.pitch, tickOn, duration);
                             note.lyric = string.IsNullOrEmpty(svpNote.lyrics) ? "a" : svpNote.lyrics;
 
-                            note.pitch.data.Clear(); 
+                            note.pitch.data.Clear();
                             note.vibrato.length = 0;
 
                             if (note.lyric == "-") note.lyric = "+~";
                             else if (note.lyric.StartsWith(".")) note.lyric = $"[{note.lyric.Substring(1)}]";
-                            
+
                             if (!string.IsNullOrWhiteSpace(svpNote.phonemes)) {
                                 phonemeQueue.Clear();
                                 foreach (var syl in svpNote.phonemes.Split('+').Select(s => s.Trim())) if (!string.IsNullOrWhiteSpace(syl)) phonemeQueue.Enqueue(syl);
@@ -695,10 +751,10 @@ namespace OpenUtau.Core.Format {
 
                             note.pitch.AddPoint(new PitchPoint(-10, 0));
                             note.pitch.AddPoint(new PitchPoint(40, 0));
-                            
+
                             double tickMinus = Math.Max(0, timeAxis.MsPosToTickPos(msOnset - 10));
                             double tickPlus = timeAxis.MsPosToTickPos(msOnset + 40);
-                            
+
                             double previousPitch = svpNote.pitch;
                             if (ouEffectivePitchPoints.Count > 0) previousPitch = ouEffectivePitchPoints.Last().y;
 
@@ -716,15 +772,15 @@ namespace OpenUtau.Core.Format {
                                     vocalModePoints[modeName].Add((tickOff, staticValue));
                                 }
                             }
-                            
+
                             part.notes.Add(note);
                         }
                     }
 
                     if (group.pitchControls != null && group.pitchControls.Count > 0) {
                         foreach (var pt in group.pitchControls) {
-                            double tick = (pt.pos + absoluteOffsetBlicks) / blicksPerTick; 
-                            aiAbsolutePitchPoints.Add((tick, pt.pitch)); 
+                            double tick = (pt.pos + absoluteOffsetBlicks) / blicksPerTick;
+                            aiAbsolutePitchPoints.Add((tick, pt.pitch));
                         }
                     }
 
@@ -736,7 +792,7 @@ namespace OpenUtau.Core.Format {
                         ParseFlatCurve(group.parameters.gender?.points, genPoints, absoluteOffsetBlicks, blicksPerTick, 100f);
                         ParseFlatCurve(group.parameters.voicing?.points, voicingPoints, absoluteOffsetBlicks, blicksPerTick, 100f);
                         ParseFlatCurve(group.parameters.toneShift?.points, toneShiftPoints, absoluteOffsetBlicks, blicksPerTick, 100f);
-                        ParseFlatCurve(group.parameters.mouthOpening?.points, opePoints, absoluteOffsetBlicks, blicksPerTick, 100f); 
+                        ParseFlatCurve(group.parameters.mouthOpening?.points, opePoints, absoluteOffsetBlicks, blicksPerTick, 100f);
                     }
 
                     // Track-level default vocal modes (JToken Fix)
@@ -752,12 +808,12 @@ namespace OpenUtau.Core.Format {
                             }
                         }
                     }
-                    
+
                     if (group.vocalModes != null) {
                         foreach (var kvp in group.vocalModes) {
                             string modeName = kvp.Key;
                             if (!vocalModePoints.ContainsKey(modeName)) vocalModePoints[modeName] = new List<(double x, double y)>();
-                            
+
                             if (kvp.Value.Type == JTokenType.Object) {
                                 var curve = kvp.Value.ToObject<SVPCurve>();
                                 ParseFlatCurve(curve?.points, vocalModePoints[modeName], absoluteOffsetBlicks, blicksPerTick, 1f);
@@ -784,7 +840,7 @@ namespace OpenUtau.Core.Format {
                         if (string.IsNullOrWhiteSpace(singerName) && reference.database != null && !string.IsNullOrWhiteSpace(reference.database.name)) {
                             singerName = reference.database.name;
                         }
-                        
+
                         if (reference.systemPitchDelta != null) ParseFlatCurve(reference.systemPitchDelta.points, aiPitchPoints, 0, blicksPerTick, 100f);
 
                         if (!string.IsNullOrEmpty(reference.groupID) && libraryGroups.TryGetValue(reference.groupID, out var linkedGroup)) {
@@ -803,7 +859,7 @@ namespace OpenUtau.Core.Format {
 
                 aiPitchPoints.RemoveAll(pt => pt.y == 4000 || pt.y == -4000);
                 manualPitchPoints.RemoveAll(pt => pt.y == 4000 || pt.y == -4000);
-                
+
                 FinalizeMergedPitch(project, part, Ustx.PITD, manualPitchPoints, aiPitchPoints, aiAbsolutePitchPoints, ouEffectivePitchPoints);
                 FinalizeCurve(project, part, Ustx.DYN, dynPoints);
                 FinalizeCurve(project, part, Ustx.TENC, tenPoints);
@@ -821,13 +877,24 @@ namespace OpenUtau.Core.Format {
 
                 if (part.notes.Count > 0) {
                     int finalDuration = part.notes.Max(n => n.End);
-                    foreach (var c in part.curves) if (c.xs.Count > 0) finalDuration = Math.Max(finalDuration, c.xs.Last());
-                    track.Singer = USinger.CreateMissing(string.IsNullOrWhiteSpace(singerName) ? "" : singerName);
+                    foreach (var c in part.curves) {
+                        if (c.xs.Count > 0) finalDuration = Math.Max(finalDuration, c.xs.Last());
+                    }
+                    track.Singer = USinger.CreateMissing(string.IsNullOrWhiteSpace(singerName) ? "Unknown" : singerName);
                     part.Duration = finalDuration;
                     project.parts.Add(part);
                     trackHasContent = true;
                 }
+
+                if (trackHasContent) {
+                    track.Singer = USinger.CreateMissing(string.IsNullOrWhiteSpace(singerName) ? "Instrumental" : singerName);
+                    project.tracks.Add(track);
+                }
                 if (trackHasContent) project.tracks.Add(track);
+            }
+
+            if (project.tracks.Count == 0) {
+                project.tracks.Add(new UTrack(project) { TrackNo = 0 });
             }
 
             project.ValidateFull();
@@ -862,13 +929,13 @@ namespace OpenUtau.Core.Format {
             int i = 0;
             while (i < pts.Count - 2 && pts[i + 1].x <= targetX) i++;
             double x0 = pts[i].x, y0 = pts[i].y, x1 = pts[i + 1].x, y1 = pts[i + 1].y, dx = x1 - x0;
-            if (dx <= 0) return y1; 
+            if (dx <= 0) return y1;
 
             double secant = (y1 - y0) / dx;
             double m0 = secant;
             if (i > 0) {
                 double dxPrev = x0 - pts[i - 1].x, secantPrev = dxPrev > 0 ? (y0 - pts[i - 1].y) / dxPrev : 0;
-                m0 = (secantPrev * secant > 0) ? 0.5 * (secantPrev + secant) : 0; 
+                m0 = (secantPrev * secant > 0) ? 0.5 * (secantPrev + secant) : 0;
             }
             double m1 = secant;
             if (i + 2 < pts.Count) {
@@ -879,7 +946,6 @@ namespace OpenUtau.Core.Format {
             return (2 * t3 - 3 * t2 + 1) * y0 + (t3 - 2 * t2 + t) * dx * m0 + (-2 * t3 + 3 * t2) * y1 + (t3 - t2) * dx * m1;
         }
 
-        // PERFECT LINEAR MATH FOR SHARP PORTAMENTO SUBTRACTION
         private static double GetYRaw(List<(double x, double y)> pts, double targetX) {
             if (pts == null || pts.Count == 0) return 0;
             if (pts.Count == 1 || targetX <= pts[0].x) return pts[0].y;
@@ -889,16 +955,16 @@ namespace OpenUtau.Core.Format {
             while (i < pts.Count - 2 && pts[i + 1].x <= targetX) i++;
             double x0 = pts[i].x, y0 = pts[i].y, x1 = pts[i + 1].x, y1 = pts[i + 1].y;
             double dx = x1 - x0;
-            
-            if (dx <= 0) return y1; 
-            
+
+            if (dx <= 0) return y1;
+
             return y0 + ((targetX - x0) / dx) * (y1 - y0);
         }
 
         private static void FinalizeCurve(UProject project, UVoicePart part, string abbr, List<(double x, double y)> points) {
             if (points == null || points.Count < 2) return;
             var curve = GetCurve(project, part, abbr);
-            if (curve == null) return; 
+            if (curve == null) return;
 
             var sortedPoints = points.OrderBy(p => p.x).ToList();
             int min = (int)(curve.descriptor?.min ?? -1200), max = (int)(curve.descriptor?.max ?? 1200);
@@ -913,7 +979,7 @@ namespace OpenUtau.Core.Format {
 
         private static void FinalizeMergedPitch(UProject project, UVoicePart part, string abbr, List<(double x, double y)> manualPt, List<(double x, double y)> aiPt, List<(double x, double y)> aiAbsolutePt, List<(double x, double y)> ouEffectivePt) {
             if (manualPt.Count == 0 && aiPt.Count == 0 && aiAbsolutePt.Count == 0) return;
-            
+
             var curve = GetCurve(project, part, abbr);
             if (curve == null) return;
 
@@ -933,31 +999,30 @@ namespace OpenUtau.Core.Format {
             var xCoords = new SortedSet<int>();
             int startX = Math.Max(0, (int)Math.Floor(minX));
             int endX = (int)Math.Ceiling(maxX);
-            
+
             for (int x = startX; x <= endX; x += 2) xCoords.Add(x);
             foreach (var pt in sortedAiAbs) xCoords.Add(Math.Max(0, (int)Math.Round(pt.x)));
             foreach (var pt in sortedAi) xCoords.Add(Math.Max(0, (int)Math.Round(pt.x)));
             foreach (var pt in sortedOuEff) xCoords.Add(Math.Max(0, (int)Math.Round(pt.x)));
 
-            foreach (int x in xCoords) { 
+            foreach (int x in xCoords) {
                 bool inManual = sortedManual.Count > 0 && x >= sortedManual.First().x && x <= sortedManual.Last().x;
                 bool inAi = sortedAi.Count > 0 && x >= sortedAi.First().x && x <= sortedAi.Last().x;
                 bool inAiAbs = sortedAiAbs.Count > 0 && x >= sortedAiAbs.First().x && x <= sortedAiAbs.Last().x;
-                
+
                 if (!inManual && !inAi && !inAiAbs) continue;
 
                 double yManual = inManual ? GetY(sortedManual, x) : 0;
                 double yAiFinal = 0;
 
                 if (inAiAbs) {
-                    double absPitch = GetY(sortedAiAbs, x); 
-                    double macroPitch = GetYRaw(sortedOuEff, x); 
-                    
-                    if (sortedOuEff.Count == 0) macroPitch = 60; 
-                    
+                    double absPitch = GetY(sortedAiAbs, x);
+                    double macroPitch = GetYRaw(sortedOuEff, x);
+
+                    if (sortedOuEff.Count == 0) macroPitch = 60;
+
                     yAiFinal = (absPitch - macroPitch) * 100.0;
-                } 
-                else if (inAi) {
+                } else if (inAi) {
                     yAiFinal = GetY(sortedAi, x);
                 }
 
@@ -976,25 +1041,43 @@ namespace OpenUtau.Core.Format {
             public List<SVPTrack> tracks { get; set; }
         }
 
-        private class SVPTime { public List<SVPMeter> meter { get; set; } public List<SVPTempo> tempo { get; set; } }
-        private class SVPMeter { public int index { get; set; } public int numerator { get; set; } public int denominator { get; set; } }
-        private class SVPTempo { public long position { get; set; } public double bpm { get; set; } }
-        private class SVPDatabase { public string name { get; set; } }
-        private class SVPCurve { public string mode { get; set; } public List<double> points { get; set; } }
-        private class SVPAudio { public string filename { get; set; } }
+        private class SVPTime {
+            public List<SVPMeter> meter { get; set; }
+            public List<SVPTempo> tempo { get; set; }
+        }
+        private class SVPMeter {
+            public int index { get; set; }
+            public int numerator { get; set; }
+            public int denominator { get; set; }
+        }
+        private class SVPTempo {
+            public long position { get; set; }
+            public double bpm { get; set; }
+        }
+        private class SVPDatabase {
+            public string name { get; set; }
+        }
+        private class SVPCurve {
+            public string mode { get; set; }
+            public List<double> points { get; set; }
+        }
+        private class SVPAudio {
+            public string filename { get; set; }
+            public double duration { get; set; }
+        }
 
         private class SVPGroup {
             public string uuid { get; set; }
             public string name { get; set; }
             public List<SVPNote> notes { get; set; }
             public SVPParameters parameters { get; set; }
-            public Dictionary<string, JToken> vocalModes { get; set; } 
+            public Dictionary<string, JToken> vocalModes { get; set; }
             public List<SVPPitchControl> pitchControls { get; set; }
-            public SVPVoice voice { get; set; } 
+            public SVPVoice voice { get; set; }
         }
 
-        private class SVPVoice { 
-            public Dictionary<string, JToken> vocalModeParams { get; set; } 
+        private class SVPVoice {
+            public Dictionary<string, JToken> vocalModeParams { get; set; }
             public double? tF0Offset { get; set; }
             public double? tF0Left { get; set; }
             public double? tF0Right { get; set; }
@@ -1004,7 +1087,7 @@ namespace OpenUtau.Core.Format {
             public double? fF0Vbr { get; set; }
             public double? tF0VbrStart { get; set; }
         }
-        
+
         private class SVPPitchControl { public long pos { get; set; } public double pitch { get; set; } }
 
         private class SVPParameters {
@@ -1014,28 +1097,28 @@ namespace OpenUtau.Core.Format {
             public SVPCurve breathiness { get; set; }
             public SVPCurve gender { get; set; }
             public SVPCurve voicing { get; set; }
-            public SVPCurve toneShift { get; set; } 
-            public SVPCurve mouthOpening { get; set; } 
+            public SVPCurve toneShift { get; set; }
+            public SVPCurve mouthOpening { get; set; }
         }
 
         private class SVPTrack {
             public string name { get; set; }
-            public SVPParameters parameters { get; set; } 
+            public SVPParameters parameters { get; set; }
             public SVPMRef mainRef { get; set; }
             public List<SVPMRef> groups { get; set; }
-            public SVPMRef mainGroupSV2 { get; set; } 
+            public SVPMRef mainGroupSV2 { get; set; }
         }
 
         private class SVPMRef {
             public string groupID { get; set; }
             public long blickOffset { get; set; }
-            public long blickAbsoluteBegin { get; set; } 
+            public long blickAbsoluteBegin { get; set; }
             public long blickAbsoluteEnd { get; set; }
             public SVPCurve systemPitchDelta { get; set; }
             public SVPDatabase database { get; set; }
             public bool isInstrumental { get; set; }
             public SVPAudio audio { get; set; }
-            public SVPVoice voice { get; set; } 
+            public SVPVoice voice { get; set; }
         }
 
         private class SVPNote {
