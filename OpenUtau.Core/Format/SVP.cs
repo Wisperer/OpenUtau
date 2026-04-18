@@ -705,7 +705,7 @@ namespace OpenUtau.Core.Format {
                     part.Duration = maxNoteEnd;
 
                     // Parse Group Curves
-                    ParseFlatCurve(group.parameters?.pitchDelta?.points, grpPitch, 0, blicksPerTick, 100f);
+                    ParseFlatCurve(group.parameters?.pitchDelta?.points, grpPitch, 0, blicksPerTick, 1f);
                     ParseFlatCurve(group.parameters?.loudness?.points, grpDyn, 0, blicksPerTick, 10f);
                     ParseFlatCurve(group.parameters?.tension?.points, grpTen, 0, blicksPerTick, 100f);
                     ParseFlatCurve(group.parameters?.breathiness?.points, grpBre, 0, blicksPerTick, 100f);
@@ -728,7 +728,7 @@ namespace OpenUtau.Core.Format {
                     }
 
                     // Parse Track Curves
-                    ParseFlatCurve(svpTrack.parameters?.pitchDelta?.points, trkPitch, -startBlick, blicksPerTick, 100f, startBlick, endBlick);
+                    ParseFlatCurve(svpTrack.parameters?.pitchDelta?.points, trkPitch, -startBlick, blicksPerTick, 1f, startBlick, endBlick);
                     ParseFlatCurve(svpTrack.parameters?.loudness?.points, trkDyn, -startBlick, blicksPerTick, 10f, startBlick, endBlick);
                     ParseFlatCurve(svpTrack.parameters?.tension?.points, trkTen, -startBlick, blicksPerTick, 100f, startBlick, endBlick);
                     ParseFlatCurve(svpTrack.parameters?.breathiness?.points, trkBre, -startBlick, blicksPerTick, 100f, startBlick, endBlick);
@@ -737,7 +737,7 @@ namespace OpenUtau.Core.Format {
                     ParseFlatCurve(svpTrack.parameters?.toneShift?.points, trkShft, -startBlick, blicksPerTick, 100f, startBlick, endBlick);
                     ParseFlatCurve(svpTrack.parameters?.mouthOpening?.points, trkOpe, -startBlick, blicksPerTick, 100f, startBlick, endBlick);
 
-                    if (reference.systemPitchDelta != null) ParseFlatCurve(reference.systemPitchDelta.points, aiPitchPoints, 0, blicksPerTick, 100f);
+                    if (reference.systemPitchDelta != null) ParseFlatCurve(reference.systemPitchDelta.points, aiPitchPoints, 0, blicksPerTick, 1f);
 
                     // Pull Base Sliders
                     double baseTen = reference.voice?.tension ?? 0;
