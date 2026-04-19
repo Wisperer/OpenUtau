@@ -355,7 +355,7 @@ namespace OpenUtau.Core.Format {
             int min = (int)(curve.descriptor?.min ?? -1200);
             int max = (int)(curve.descriptor?.max ?? 1200);
 
-            for (int x = startTick; x <= endTick; x += 5) {
+            for (int x = startTick; x <= endTick; x += 1) {
                 double yGrp = sortedGrp.Count > 0 ? GetY(sortedGrp, x) : 0;
                 double yTrk = sortedTrk.Count > 0 ? GetY(sortedTrk, x) : 0;
                 double finalY = yGrp + yTrk + (baseVal * multiplier);
@@ -383,7 +383,9 @@ namespace OpenUtau.Core.Format {
             int startTick = 0;
             int endTick = part.Duration > 0 ? part.Duration : 480;
 
-            for (int x = startTick; x <= endTick; x += 5) xCoords.Add(x);
+            for (int x = startTick; x <= endTick; x += 1) xCoords.Add(x);
+            foreach (var pt in sortedGrp) xCoords.Add(Math.Max(0, (int)Math.Round(pt.x))); 
+            foreach (var pt in sortedTrk) xCoords.Add(Math.Max(0, (int)Math.Round(pt.x))); 
             foreach (var pt in sortedAiAbs) xCoords.Add(Math.Max(0, (int)Math.Round(pt.x)));
             foreach (var pt in sortedAi) xCoords.Add(Math.Max(0, (int)Math.Round(pt.x)));
 
@@ -860,19 +862,26 @@ namespace OpenUtau.Core.Format {
             var sortedGrp = groupPts.OrderBy(p => p.x).ToList();
             var sortedTrk = trackPts.OrderBy(p => p.x).ToList();
 
+            var xCoords = new SortedSet<int>();
             int startTick = 0;
             int endTick = part.Duration > 0 ? part.Duration : 480;
+
+            for (int x = startTick; x <= endTick; x += 1) xCoords.Add(x);
+            foreach (var pt in sortedGrp) xCoords.Add(Math.Max(0, (int)Math.Round(pt.x)));
+            foreach (var pt in sortedTrk) xCoords.Add(Math.Max(0, (int)Math.Round(pt.x)));
 
             int min = (int)(curve.descriptor?.min ?? -1200);
             int max = (int)(curve.descriptor?.max ?? 1200);
 
-            for (int x = startTick; x <= endTick; x += 5) {
+            foreach (int x in xCoords) {
                 double yGrp = sortedGrp.Count > 0 ? GetY(sortedGrp, x) : 0;
                 double yTrk = sortedTrk.Count > 0 ? GetY(sortedTrk, x) : 0;
                 double finalY = yGrp + yTrk + (baseVal * multiplier);
                 
-                curve.xs.Add(x);
-                curve.ys.Add(Math.Max(min, Math.Min(max, (int)Math.Round(finalY))));
+                if (curve.xs.Count == 0 || x > curve.xs.Last()) {
+                    curve.xs.Add(x);
+                    curve.ys.Add(Math.Max(min, Math.Min(max, (int)Math.Round(finalY))));
+                }
             }
         }
 
@@ -894,7 +903,9 @@ namespace OpenUtau.Core.Format {
             int startTick = 0;
             int endTick = part.Duration > 0 ? part.Duration : 480;
 
-            for (int x = startTick; x <= endTick; x += 5) xCoords.Add(x);
+            for (int x = startTick; x <= endTick; x += 1) xCoords.Add(x);
+            foreach (var pt in sortedGrp) xCoords.Add(Math.Max(0, (int)Math.Round(pt.x))); 
+            foreach (var pt in sortedTrk) xCoords.Add(Math.Max(0, (int)Math.Round(pt.x))); 
             foreach (var pt in sortedAiAbs) xCoords.Add(Math.Max(0, (int)Math.Round(pt.x)));
             foreach (var pt in sortedAi) xCoords.Add(Math.Max(0, (int)Math.Round(pt.x)));
             foreach (var pt in sortedOuEff) xCoords.Add(Math.Max(0, (int)Math.Round(pt.x)));
