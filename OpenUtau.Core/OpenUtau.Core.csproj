@@ -33,16 +33,17 @@
     <PackageReference Include="WanaKana-net" Version="1.0.0" />
     <PackageReference Include="YamlDotNet" Version="15.1.2" />
     <PackageReference Include="NetMQ" Version="4.0.1.13" />
+    <PackageReference Include="Microsoft.ML" Version="3.0.1" />  
   </ItemGroup>
-  <ItemGroup Condition="'$([System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform($([System.Runtime.InteropServices.OSPlatform]::Windows)))' == 'true'">
-    <PackageReference Include="NAudio" Version="2.2.1" />
-    <PackageReference Include="Microsoft.ML.OnnxRuntime.DirectML" Version="1.23.2" />
+  <ItemGroup Condition="$(RuntimeIdentifier.StartsWith('win'))">
+    <PackageReference Include="NAudio" Version="2.2.4" />
+    <PackageReference Include="Microsoft.ML.OnnxRuntime.DirectML" Version="1.24.4" />
   </ItemGroup>
-  <ItemGroup Condition="'$([System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform($([System.Runtime.InteropServices.OSPlatform]::Linux)))' == 'true'">
-    <PackageReference Include="Microsoft.ML.OnnxRuntime.Gpu" Version="1.23.2" />
+  <ItemGroup Condition="$(RuntimeIdentifier.StartsWith('linux'))">
+    <PackageReference Include="Microsoft.ML.OnnxRuntime.Gpu" Version="1.24.4" />
   </ItemGroup>
-  <ItemGroup Condition="'$([System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform($([System.Runtime.InteropServices.OSPlatform]::OSX)))' == 'true'">
-    <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.23.2" />
+  <ItemGroup Condition="$(RuntimeIdentifier.StartsWith('osx'))">
+    <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.24.4" />
   </ItemGroup>
   <ItemGroup>
     <Compile Update="Analysis\Crepe\Resources.Designer.cs">
